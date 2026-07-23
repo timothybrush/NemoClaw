@@ -51,6 +51,72 @@ discovery command locally to inspect the generated test matrix:
 npx tsx tools/e2e/credential-free-tests.mts
 ```
 
+## Larger-runner routing
+
+The larger-runner experiment is inactive while the configuration variable
+`E2E_LARGER_RUNNER_LABEL` is unset. In that state, every eligible lane continues
+to use `ubuntu-latest`. The trusted `generate-matrix` job builds one runner map
+before checking out test code, and it consumes the variable only when the
+workflow repository is `NVIDIA/NemoClaw`, the ref is `refs/heads/main`, and
+no alternate checkout SHA is requested. PR-gate dispatches therefore remain on
+standard runners even though they use the trusted workflow definition from
+`main`.
+
+Exact-head PR-gate dispatches use a bounded swap fallback for the hosted
+Hermes image-building lanes that remain on those standard runners. The live
+Vitest helper activates the fallback only when GitHub Actions supplies a
+validated lowercase 40-hex checkout SHA. It reuses at least 32 GiB of active
+swap when available; otherwise, it creates one fixed 32 GiB swap file under
+`/mnt` before agent-turn latency, Hermes inference switch and shields, the
+Hermes Bedrock and stable MCP shards, or the `hermes-e2e`, `hermes-dashboard`,
+and Hermes security-posture tests. Setup failure stops before Vitest. Scheduled
+and ordinary manual `main` runs, larger-runner executions, rebuild lanes with
+workflow-managed swap, dedicated-runner lanes, `mcp-bridge-dev`, and non-Hermes
+shards do not use this fallback.
+
+The fallback exists because the alternate-checkout trust boundary deliberately
+keeps PR-authored code from selecting the administrator-managed larger-runner
+label; changing the PR checkout cannot safely grant itself that capacity.
+Remove the fallback only after the trusted controller routes exact-head PR
+gates to an ephemeral GitHub-hosted runner with at least 32 GB RAM without
+weakening the exact-SHA guard, and five consecutive runs of every protected
+lane complete without runner loss while runner-pressure telemetry reports less
+than 1 GiB of swap used.
+
+The eligible set is limited to the measured or repeatedly interrupted heavy
+lanes:
+
+- `common-egress-agent`;
+- `hermes-e2e`, `hermes-dashboard`, and `hermes-discord`;
+- both `hermes-inference-switch` modes;
+- `hermes-shields-config`;
+- the Hermes shards of `security-posture` and `channels-stop-start`;
+- `rebuild-hermes`;
+- `rebuild-hermes-stale-base`;
+- the `hermes` and `deepagents` shards of `mcp-bridge`.
+
+The OpenClaw shards of the matrix jobs, the `openclaw` MCP shard, and
+`mcp-bridge-dev` remain on `ubuntu-latest`; unrelated jobs retain their
+existing runner assignments. Before setting the variable, an organization
+owner must:
+
+1. Create a GitHub-hosted Ubuntu x64 larger runner with 8 vCPU, 32 GB RAM, and
+   300 GB SSD in a dedicated runner group.
+2. Set the group maximum concurrency to 4 and restrict repository access to
+   `NVIDIA/NemoClaw` and workflow access to
+   `NVIDIA/NemoClaw/.github/workflows/e2e.yaml@refs/heads/main`.
+3. Record at least five standard-runner samples for each eligible lane,
+   including queue time, execution time, peak CPU, memory and disk use,
+   infrastructure failures, and estimated cost.
+4. Copy the larger runner's workflow label into the repository variable, then
+   repeat the same measurements for at least five representative executions
+   per migrated lane.
+
+Clearing `E2E_LARGER_RUNNER_LABEL` is the rollback. It sends the eligible lanes
+back to `ubuntu-latest` without changing selectors, test setup, or test
+semantics. Do not replace this experiment with a persistent self-hosted runner;
+that requires a separate decision.
+
 ## Scheduled operations
 
 The consolidated workflow keeps its operational reporting in the same job
